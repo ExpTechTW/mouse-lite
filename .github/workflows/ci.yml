@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  commits:
+    runs-on: ubuntu-latest
+    steps:
+      # The branch as written, not the merge GitHub makes for the pull request: every commit judged here has to be
+      # one somebody wrote.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Commit messages
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # The gate skips merge commits, so a merge would bring commits in unchecked.
+          if [ -n "$(git rev-list --merges "$BASE_SHA..$HEAD_SHA")" ]; then
+            echo "::error::the branch has merge commits; rebase it onto the base branch instead"
+            exit 1
+          fi
+          scripts/check-commits.sh "$BASE_SHA..$HEAD_SHA"
+
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      # Swift comes from mise.toml, as in a release build.
+      - uses: jdx/mise-action@v4
+      - run: swift build -c release
+      - run: swift test

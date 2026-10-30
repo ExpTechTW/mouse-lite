@@ -1,0 +1,17 @@
+.DS_Store
+.AppleDouble
+.LSOverride
+.build/
+DerivedData/
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+build/
+dist/
+*.app/
+*.dmg
+*.zip
+*.log
+*.swp
+*.tmp

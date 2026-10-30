@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:mouse-lite}",
+            "name": "Debug MouseLite",
+            "target": "MouseLite",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug MouseLite"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:mouse-lite}",
+            "name": "Release MouseLite",
+            "target": "MouseLite",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release MouseLite"
+        }
+    ]
+}

@@ -1,0 +1,170 @@
+# Every push to main publishes a snapshot, as a GitHub pre-release; every version tag (1.1.0, v1.1.0, rc0.1.0,
+# v0.1.0-rc.1) publishes a release, with RCs as pre-releases. The naming follows ExpTechTW/FreeAudio:
+# scripts/version.sh decides the label, train, code and pre-release flag.
+#
+# Installed copies update themselves from these releases (Sources/MouseLite/Updater.swift), so each one carries the
+# zipped app, signed with the team's certificate and notarized by Apple, and its build code at the end of the notes.
+name: Release
+
+on:
+  push:
+    branches: ["main"]
+    # A release tag is a version or an RC: 1.1.0, v1.1.0, rc0.1.0, v0.1.0-rc.1. Snapshot tags (26w43a) also start
+    # with a digit, so the job skips those below rather than building a release from one.
+    tags: ["v*", "[0-9]*", "rc*"]
+  workflow_dispatch:
+
+# One at a time: two runs counting the same tags would give their snapshots the same name.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Snapshot tags (26w43a) are pushed by this workflow itself; ignore one if somebody pushes it by hand.
+    if: github.event_name != 'push' || github.ref_type != 'tag' || startsWith(github.ref_name, 'v') || !contains(github.ref_name, 'w')
+    runs-on: macos-26
+    permissions:
+      contents: write
+    steps:
+      # Full history: the code counts this year's commits, and the label counts this week's snapshots.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Version
+        id: v
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if ! printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v?([0-9]+\.[0-9]+(\.[0-9]+)?|rc[0-9]+\.[0-9]+(\.[0-9]+)?|[0-9]+\.[0-9]+\.[0-9]+-(rc|beta|alpha)\.?[0-9]*)$'; then
+              echo "::error::a release tag is a version or an RC, e.g. 1.1.0, v1.1.0, rc0.1.0 or v0.1.0-rc.1 — not $GITHUB_REF_NAME"
+              exit 1
+            fi
+            eval "$(scripts/version.sh)"
+            if [ "$MOUSELITE_LABEL" != "${GITHUB_REF_NAME#v}" ]; then
+              echo "::error::$GITHUB_REF_NAME isn't the newest release tag on its commit ($MOUSELITE_LABEL is)"
+              exit 1
+            fi
+            case "$MOUSELITE_LABEL" in
+            rc[0-9]*|*-rc*|*-beta*|*-alpha*) kind=rc ;;
+            *) kind=release ;;
+            esac
+          else
+            # A snapshot, even when the commit also carries a release tag: that tag's run publishes the release.
+            eval "$(scripts/version.sh --snapshot)"
+            kind=snapshot
+          fi
+          {
+            echo "label=$MOUSELITE_LABEL"
+            echo "train=$MOUSELITE_TRAIN"
+            echo "code=$MOUSELITE_CODE"
+            echo "date=$MOUSELITE_DATE"
+            echo "prerelease=$MOUSELITE_PRERELEASE"
+            echo "kind=$kind"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::$MOUSELITE_LABEL — $MOUSELITE_TRAIN ($MOUSELITE_CODE, $MOUSELITE_DATE)"
+
+      # Codes only have to rise within a kind of release: snapshots with snapshots, RCs with RCs, releases with
+      # releases. A final release or an RC can share the code of a snapshot of the same commit — the same build under
+      # another name — and an RC and the release it became can share one too. Below means main's history was
+      # rewritten; equal means this exact build is out already.
+      - name: Code must be above the last one published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ steps.v.outputs.code }}
+          KIND: ${{ steps.v.outputs.kind }}
+        run: |
+          # `.body // ""`: a release without notes has a null body, which `capture` refuses.
+          previous="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq --arg kind "$KIND" '
+            [ .[]
+              | select(.draft != true)
+              | . as $release
+              | (if (($release.tag_name // "") | test("^[0-9][0-9]w")) then "snapshot"
+                 elif ((($release.tag_name // "") + " " + ($release.name // "")) | test("(?i)(rc|beta|alpha)")) then "rc"
+                 elif ($release.prerelease | not) then "release"
+                 else "other" end) as $releaseKind
+              | select($releaseKind == $kind)
+              | ($release.body // "")
+              | capture("<!--\\s*mouselite-build:\\s*(?<c>\\d+)") | .c | tonumber
+            ] | max // 0')"
+          echo "kind=$KIND previous=$previous current=$CODE"
+          if [ "$CODE" -eq "$previous" ]; then
+            echo "::error::build $CODE is out already in this channel"
+            exit 1
+          elif [ "$CODE" -lt "$previous" ]; then
+            echo "::error::build $CODE is below the published $previous — was main's history rewritten?"
+            exit 1
+          fi
+
+      - name: Install Swift
+        uses: jdx/mise-action@v4
+
+      - name: Test
+        run: swift test
+
+      - name: Install the signing identity
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: scripts/ci-keychain.sh
+
+      - name: Build
+        env:
+          MOUSELITE_LABEL: ${{ steps.v.outputs.label }}
+          MOUSELITE_TRAIN: ${{ steps.v.outputs.train }}
+          MOUSELITE_CODE: ${{ steps.v.outputs.code }}
+          MOUSELITE_DATE: ${{ steps.v.outputs.date }}
+          MOUSELITE_PRERELEASE: ${{ steps.v.outputs.prerelease }}
+          UPDATE_REPOSITORY: ${{ github.repository }}
+          ARCHIVE: "1"
+          # Notarized, a download opens without Gatekeeper's warning.
+          NOTARIZE: "1"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          scripts/build-app.sh
+          # An installed copy refuses an update its own team didn't sign, so an ad hoc build would reach nobody.
+          team="$(codesign -dv build/MouseLite.app 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+          if [ -z "$team" ] || [ "$team" = "not set" ]; then
+            echo "::error::the app isn't signed by a team"
+            exit 1
+          fi
+          # What a Mac decides on opening a download: it must be a notarized Developer ID app.
+          spctl --assess --type execute -vv build/MouseLite.app 2>&1 | tee /dev/stderr | grep -q "source=Notarized Developer ID" ||
+            { echo "::error::Gatekeeper doesn't accept the app as notarized"; exit 1; }
+
+      - name: Release notes
+        env:
+          LABEL: ${{ steps.v.outputs.label }}
+          CODE: ${{ steps.v.outputs.code }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            scripts/notes.sh "$LABEL" "$CODE" --release > NOTES.md
+          else
+            scripts/notes.sh "$LABEL" "$CODE" > NOTES.md
+          fi
+          cat NOTES.md
+
+      - name: Publish
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ steps.v.outputs.label }}
+          PRERELEASE: ${{ steps.v.outputs.prerelease }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            # The bare label. Only `v` tags are releases, so snapshots have a namespace of their own, and it's what
+            # scripts/version.sh counts for the next letter.
+            tag="$LABEL"
+            git tag "$tag"
+            git push origin "$tag"
+          fi
+          gh release create "$tag" \
+            --title "$LABEL" \
+            --notes-file NOTES.md \
+            --prerelease="$PRERELEASE" \
+            "build/MouseLite-$LABEL.zip"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,4 @@
+# The Swift that builds MouseLite, on every Mac and in CI (jdx/mise-action), so code that compiles here compiles for a
+# release too. Xcode still supplies the SDK.
+[tools]
+swift = "6.4.0"
