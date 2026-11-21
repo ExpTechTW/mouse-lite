@@ -69,9 +69,24 @@ final class DeviceMonitor {
         return connected.values.sorted { ($0.isTrackpad ? 1 : 0, $0.name) < ($1.isTrackpad ? 1 : 0, $1.name) }
     }
 
-    func recentDevice(within window: CFTimeInterval = 0.6) -> PointerDevice? {
+    func scrollDevice(isContinuous: Bool) -> PointerDevice? {
         lock.lock(); defer { lock.unlock() }
-        return recentDeviceLocked(within: window)
+        return Self.scrollTarget(among: connected.values, recent: recentDeviceLocked(), isContinuous: isContinuous)
+    }
+
+    static func scrollTarget(among devices: some Collection<PointerDevice>, recent: PointerDevice?,
+                             isContinuous: Bool) -> PointerDevice? {
+        if let recent { return recent }
+        guard !isContinuous else { return nil }
+
+        // Some receivers deliver wheel ticks without a recent HID value on the mouse interface.
+        // A discrete tick can still be assigned when there is only one connected mouse.
+        var mouse: PointerDevice?
+        for device in devices where !device.isTrackpad {
+            guard mouse == nil else { return nil }
+            mouse = device
+        }
+        return mouse
     }
 
     /// The device a middle/side button belongs to.
@@ -91,9 +106,9 @@ final class DeviceMonitor {
         return mice.max { (lastActive[$0.id] ?? 0) < (lastActive[$1.id] ?? 0) }
     }
 
-    private func recentDeviceLocked(within window: CFTimeInterval = 0.6) -> PointerDevice? {
+    private func recentDeviceLocked() -> PointerDevice? {
         let now = CFAbsoluteTimeGetCurrent()
-        guard let best = lastActive.filter({ now - $0.value <= window }).max(by: { $0.value < $1.value }) else { return nil }
+        guard let best = lastActive.filter({ now - $0.value <= 0.6 }).max(by: { $0.value < $1.value }) else { return nil }
         return connected[best.key]
     }
 

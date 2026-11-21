@@ -82,7 +82,6 @@ final class EventTap {
 
     private func handleButtonDown(_ event: CGEvent) -> Bool {
         let n = Int(event.getIntegerValueField(.mouseEventButtonNumber))
-        // Not recentDevice(): a trackpad scrolled a moment ago must not hide the mouse whose button this is.
         let device = monitor.buttonDevice()
         let action = device.flatMap { store.settings(for: $0.id) }?.buttonAction(n) ?? .none
         if debug { NSLog("MouseLite button %d: device=%@ action=%@", n, device?.name ?? "nil", action.rawValue) }
@@ -93,10 +92,11 @@ final class EventTap {
     }
 
     private func handleScroll(_ event: CGEvent) {
-        let device = monitor.recentDevice()
+        let isContinuous = event.getIntegerValueField(.scrollWheelEventIsContinuous)
+        let device = monitor.scrollDevice(isContinuous: isContinuous != 0)
         if debug {
             NSLog("MouseLite scroll: device=%@ continuous=%d dy=%d system=%@ settings=%@",
-                  device?.name ?? "nil", event.getIntegerValueField(.scrollWheelEventIsContinuous),
+                  device?.name ?? "nil", isContinuous,
                   event.getIntegerValueField(.scrollWheelEventDeltaAxis1), natural ? "natural" : "traditional",
                   device.flatMap { store.settings(for: $0.id) }.map { "\($0.vertical)/\($0.horizontal)" } ?? "none")
         }

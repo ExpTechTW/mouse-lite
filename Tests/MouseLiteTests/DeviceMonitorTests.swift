@@ -28,4 +28,20 @@ final class DeviceMonitorTests: XCTestCase {
         )
         XCTAssertEqual(target?.id, newer.id)
     }
+
+    func testDiscreteScrollUsesTheOnlyMouseWithoutRecentDeviceInput() {
+        XCTAssertEqual(DeviceMonitor.scrollTarget(among: [trackpad, mouse], recent: nil, isContinuous: false)?.id, mouse.id)
+        XCTAssertNil(DeviceMonitor.scrollTarget(among: [trackpad], recent: nil, isContinuous: false))
+    }
+
+    func testDiscreteScrollRequiresRecentInputToChooseBetweenMice() {
+        let other = PointerDevice(id: "other", name: "Other Mouse", isTrackpad: false)
+        XCTAssertNil(DeviceMonitor.scrollTarget(among: [mouse, other], recent: nil, isContinuous: false))
+        XCTAssertEqual(DeviceMonitor.scrollTarget(among: [mouse, other], recent: other, isContinuous: false)?.id, other.id)
+    }
+
+    func testContinuousScrollKeepsItsRecentDevice() {
+        XCTAssertEqual(DeviceMonitor.scrollTarget(among: [trackpad, mouse], recent: trackpad, isContinuous: true)?.id, trackpad.id)
+        XCTAssertNil(DeviceMonitor.scrollTarget(among: [trackpad, mouse], recent: nil, isContinuous: true))
+    }
 }
